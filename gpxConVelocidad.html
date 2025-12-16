@@ -1,0 +1,561 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Visor Múltiple de Rutas GPX con Animación</title>
+    
+    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+    
+    <style>
+        body { 
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+            margin: 0; 
+            padding: 20px; 
+            background-color: #eef2f7; 
+            color: #333;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            min-height: 100vh;
+        }
+        h1 { 
+            color: #2c3e50; 
+            text-align: center;
+            margin-bottom: 25px;
+        }
+        .container {
+            max-width: 1200px;
+            width: 95%;
+            background-color: #fff;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+            margin-bottom: 20px;
+        }
+        #map { 
+            height: 80vh; 
+            width: 100%; 
+            margin-top: 25px; 
+            border: 1px solid #c9d6e4; 
+            border-radius: 8px;
+            box-shadow: inset 0 1px 3px rgba(0,0,0,0.1);
+            background-color: #ffffff; 
+            position: relative; /* CLAVE para posicionar el panel respecto al mapa */
+        }
+        #file-selector { 
+            display: block;
+            width: calc(100% - 22px); 
+            padding: 12px; 
+            margin-bottom: 15px;
+            border: 1px solid #a8c2d9; 
+            border-radius: 5px;
+            font-size: 1rem;
+            background-color: #f7fcff;
+            cursor: pointer;
+        }
+        #message {
+            margin-top: 15px;
+            padding: 10px;
+            border-radius: 5px;
+            font-weight: bold;
+            text-align: center;
+        }
+        .loading {
+            background-color: #f0f8ff;
+            color: #2980b9;
+        }
+        .success {
+            background-color: #e6ffee;
+            color: #27ae60;
+        }
+        .end-marker, .start-marker {
+            font-size: 24px; 
+            text-align: center;
+            line-height: 1;
+        }
+        .leaflet-control-zoom {
+            display: none !important;
+        }
+        #zoom-button, #clear-button {
+            padding: 10px 20px;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-weight: bold;
+            margin: 10px 5px;
+            transition: background-color 0.3s;
+        }
+        #zoom-button {
+            background-color: #2ecc71; 
+        }
+        #zoom-button:hover {
+            background-color: #27ae60;
+        }
+        #clear-button {
+            background-color: #e74c3c; 
+        }
+        #clear-button:hover {
+            background-color: #c0392b;
+        }
+        #zoom-button:disabled, #clear-button:disabled {
+            background-color: #bdc3c7;
+            cursor: not-allowed;
+        }
+        #controls {
+            display: flex;
+            justify-content: center;
+            width: 100%;
+        }
+
+        /* --- NUEVOS ESTILOS PARA EL PANEL DE CONTROL --- */
+        #status-panel {
+            position: absolute;
+            top: 10px;    /* Distancia desde el borde superior del MAPA */
+            right: 10px;  /* Distancia desde el borde derecho del MAPA */
+            z-index: 1000; 
+            background: rgba(255, 255, 255, 0.9);
+            padding: 10px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
+            width: 150px; 
+            max-height: 75vh;
+            overflow-y: auto;
+            display: none; 
+        }
+
+        .route-status-box {
+            margin-bottom: 8px;
+            padding: 5px;
+            border-left: 5px solid; 
+            font-size: 0.9em;
+            line-height: 1.2;
+        }
+
+        .route-status-box .route-label {
+            font-weight: bold;
+            display: block;
+            margin-bottom: 2px;
+        }
+        .route-status-box .speed-label {
+            display: block;
+            font-size: 1.1em;
+        }
+        /* ----------------------------------------------- */
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>⛵ Visor Múltiple de Rutas GPX con Animación</h1>
+        
+        <input type="file" id="file-selector" accept=".gpx" multiple>
+        
+        <div id="controls">
+            <button id="zoom-button" disabled>🔄 Centrar y Ampliar Rutas</button>
+            <button id="clear-button" disabled style="display: none;">🗑️ Limpiar Mapa</button>
+        </div>
+        
+        <div id="message" class="loading">Carga uno o varios archivos .gpx para visualizar las rutas animadas.</div>
+        
+        <div id="map">
+            <div id="status-panel">
+                </div>
+        </div>
+    </div>
+
+    <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+    
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            // --- CONSTANTES Y VARIABLES GLOBALES ---
+            const fileSelector = document.getElementById('file-selector');
+            const messageElement = document.getElementById('message');
+            const zoomButton = document.getElementById('zoom-button'); 
+            const clearButton = document.getElementById('clear-button'); 
+            const statusPanel = document.getElementById('status-panel'); // Referencia al nuevo panel
+            
+            let map = null; 
+            let allRoutesData = []; 
+            let routeColors = ['#007bff', '#2ecc71', '#e67e22', '#9b59b6', '#34495e'];
+            let animationFrameId = null; 
+            let overallStartTime = 0; 
+            let currentMarkers = []; 
+            const SPEED_MULTIPLIER = 10; 
+
+            // --- FUNCIÓN AUXILIAR: Distancia Haversine (en km) ---
+            function getDistance(lat1, lon1, lat2, lon2) {
+                const R = 6371; // Radio de la Tierra en kilómetros
+                const dLat = (lat2 - lat1) * (Math.PI / 180);
+                const dLon = (lon2 - lon1) * (Math.PI / 180);
+                const a = 
+                    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+                    Math.cos(lat1 * (Math.PI / 180)) * Math.cos(lat2 * (Math.PI / 180)) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+                const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+                return R * c; // Distancia en km
+            }
+
+
+            // --- DECODIFICADOR Y EXTRACTOR GPX NATIVO (CON TIEMPO) ---
+            function decodeAndExtractGPX(xmlString) {
+                return new Promise((resolve, reject) => {
+                    const points = []; 
+                    
+                    try {
+                        const parser = new DOMParser();
+                        const xmlDoc = parser.parseFromString(xmlString, "text/xml");
+                        
+                        let trackPoints = xmlDoc.getElementsByTagName('trkpt');
+                        if (trackPoints.length === 0) {
+                             trackPoints = xmlDoc.getElementsByTagName('rtept');
+                        }
+                        if (trackPoints.length === 0) {
+                             trackPoints = xmlDoc.querySelectorAll('trkpt, rtept');
+                        }
+
+                        if (trackPoints.length === 0) {
+                            reject(new Error("El archivo GPX es válido pero no contiene puntos de seguimiento (<trkpt> o <rtept>)."));
+                            return;
+                        }
+
+                        for (let i = 0; i < trackPoints.length; i++) {
+                            const point = trackPoints[i];
+                            const lat = parseFloat(point.getAttribute('lat'));
+                            const lon = parseFloat(point.getAttribute('lon'));
+                            
+                            const timeElement = point.getElementsByTagName('time')[0];
+                            const timeStr = timeElement ? timeElement.textContent : null;
+                            const timeMs = timeStr ? new Date(timeStr).getTime() : null; 
+
+                            if (!isNaN(lat) && !isNaN(lon) && timeMs !== null) {
+                                points.push({ lat: lat, lon: lon, time: timeMs });
+                            }
+                        }
+                        
+                        if (points.length > 0) {
+                            resolve(points);
+                        } else {
+                            reject(new Error("No se pudieron extraer coordenadas válidas o marcas de tiempo del archivo GPX."));
+                        }
+                    } catch (error) {
+                        reject(new Error("Error al analizar el contenido XML del archivo GPX: " + error.message));
+                    }
+                });
+            }
+
+            // --- 1. Inicializar/Reiniciar el Mapa (Leaflet) ---
+            function initializeMap(centerLat, centerLon, zoomLevel = 2) {
+                if (map) {
+                    map.eachLayer(layer => {
+                        if (layer.options && layer.options.pane === 'overlayPane') {
+                             map.removeLayer(layer);
+                        }
+                    });
+                } else {
+                    map = L.map('map', { 
+                        zoomControl: false 
+                    });
+                    map.invalidateSize();
+                    
+                    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                        maxZoom: 19,
+                        attribution: '© OpenStreetMap contributors'
+                    }).addTo(map);
+                }
+                
+                map.setView([centerLat, centerLon], zoomLevel); 
+
+                messageElement.textContent = 'Rutas listas para animar.';
+                messageElement.className = 'message success';
+                return map;
+            }
+
+            // --- FUNCIÓN DEL BOTÓN DE ZOOM (Ampliación) ---
+            function fitToRouteBounds() {
+                const allPoints = allRoutesData.flatMap(route => 
+                    route.points.map(p => [p.lat, p.lon])
+                );
+
+                if (map && allPoints.length > 0) {
+                    const fullLine = L.polyline(allPoints);
+                    
+                    try {
+                        map.fitBounds(fullLine.getBounds(), { 
+                            padding: [100, 100], 
+                            duration: 1.0,
+                            maxZoom: 15
+                        });
+                    } catch (e) {
+                        console.error("Error en fitBounds:", e);
+                    }
+                }
+            }
+            
+            // --- 2. FUNCIÓN DE ANIMACIÓN SINCRONIZADA (CON VELOCIDAD) ---
+            let animationStartTimestamp = null;
+            
+            function animateRoutes(timestamp) {
+                if (!animationStartTimestamp) {
+                    animationStartTimestamp = timestamp;
+                }
+
+                const elapsedSinceAnimationStart = (timestamp - animationStartTimestamp) * SPEED_MULTIPLIER; 
+
+                let routesCompleted = 0;
+
+                for (let i = 0; i < allRoutesData.length; i++) {
+                    const route = allRoutesData[i];
+                    const marker = currentMarkers[i];
+                    const animatedLine = route.line;
+                    
+                    if (route.isComplete) {
+                        routesCompleted++;
+                        continue;
+                    }
+                    
+                    const currentSimulatedTime = overallStartTime + elapsedSinceAnimationStart;
+                    
+                    let nextIndex = route.currentIndex + 1;
+                    let lastDrawnIndex = route.currentIndex; 
+
+                    while (nextIndex < route.points.length && route.points[nextIndex].time < currentSimulatedTime) {
+                         nextIndex++;
+                    }
+                    
+                    const nextPointIndex = nextIndex - 1;
+                    
+                    if (nextPointIndex > route.currentIndex) {
+                        
+                        // 4. Dibujar los puntos intermedios
+                        for (let j = route.currentIndex + 1; j <= nextPointIndex; j++) {
+                            const point = route.points[j];
+                            const latlon = [point.lat, point.lon];
+                            animatedLine.addLatLng(latlon);
+                            marker.setLatLng(latlon);
+                            lastDrawnIndex = j;
+                        }
+                        
+                        // 5. Calcular y mostrar la velocidad (solo si se movió al menos un punto)
+                        if (lastDrawnIndex > route.currentIndex) {
+                            const p1 = route.points[route.currentIndex];
+                            const p2 = route.points[lastDrawnIndex];
+                            
+                            const distanceKm = getDistance(p1.lat, p1.lon, p2.lat, p2.lon);
+                            const timeSeconds = (p2.time - p1.time) / 1000;
+                            
+                            let speedKmH = 0;
+                            if (timeSeconds > 0) {
+                                speedKmH = (distanceKm / timeSeconds) * 3600;
+                            }
+                            
+                            const speedText = speedKmH.toFixed(1); 
+                            
+                            // 🎯 ACTUALIZAR EL PANEL DE ESTADO
+                            const statusDiv = document.getElementById(`route-status-${i}`);
+                            if (statusDiv) {
+                                statusDiv.querySelector('.speed-label').textContent = `${speedText} km/h`;
+                            }
+                        }
+                        
+                        route.currentIndex = nextPointIndex;
+                    }
+                    
+                    // 6. Verificar fin de la ruta
+                    if (nextPointIndex >= route.points.length - 1) {
+                        route.isComplete = true;
+                        marker.remove();
+                        
+                        const lastPoint = route.points[route.points.length - 1];
+
+                         L.marker([lastPoint.lat, lastPoint.lon], {
+                            icon: L.divIcon({className: 'end-marker', html: `🏁<span style="color:${route.color}"> #${i + 1}</span>`}) 
+                        }).addTo(map)
+                            .bindPopup(`Fin Ruta #${i + 1}`);
+                        
+                        // Actualizar el panel a "Completada"
+                        const statusDiv = document.getElementById(`route-status-${i}`);
+                        if (statusDiv) {
+                            statusDiv.querySelector('.speed-label').textContent = `Completada`;
+                        }
+                        
+                        routesCompleted++;
+                    }
+                }
+                
+                // 7. Loop de animación
+                if (routesCompleted < allRoutesData.length) {
+                    animationFrameId = requestAnimationFrame(animateRoutes);
+                } else {
+                    messageElement.textContent = `✅ Animación sincronizada completada. Velocidad: ${SPEED_MULTIPLIER}x.`;
+                    messageElement.className = 'message success';
+                }
+            }
+
+
+            // --- Limpiar el Mapa ---
+            function clearMap() {
+                 if (animationFrameId) {
+                     cancelAnimationFrame(animationFrameId);
+                     animationFrameId = null;
+                 }
+                 
+                 if (map) {
+                    map.eachLayer(layer => {
+                        if (layer !== map.attributionControl && !layer.options.attribution) { 
+                            map.removeLayer(layer);
+                        }
+                    });
+                    map.setView([0, 0], 2); 
+                }
+                
+                allRoutesData = [];
+                currentMarkers = [];
+                overallStartTime = 0;
+                animationStartTimestamp = null;
+                
+                // Limpiar y ocultar el panel
+                statusPanel.innerHTML = '';
+                statusPanel.style.display = 'none';
+
+                zoomButton.disabled = true;
+                clearButton.disabled = true;
+                clearButton.style.display = 'none';
+                messageElement.textContent = 'Mapa limpiado. Carga uno o varios archivos .gpx para visualizar.';
+                messageElement.className = 'message loading';
+            }
+            
+            // --- 3. Manejador de Eventos ---
+            zoomButton.addEventListener('click', fitToRouteBounds);
+            clearButton.addEventListener('click', clearMap);
+
+            fileSelector.addEventListener('change', async (event) => {
+                const files = event.target.files;
+                if (files.length === 0) return;
+                
+                clearMap(); 
+
+                messageElement.textContent = `Cargando y procesando ${files.length} archivo(s) GPX...`;
+                messageElement.className = 'message loading';
+                
+                const filePromises = [];
+                
+                for (let i = 0; i < files.length; i++) {
+                    const file = files[i];
+                    const reader = new FileReader();
+
+                    filePromises.push(new Promise((resolve, reject) => {
+                        reader.onload = async function(e) {
+                            const xmlString = e.target.result;
+                            try {
+                                const points = await decodeAndExtractGPX(xmlString);
+                                resolve(points);
+                            } catch (error) {
+                                console.error(`Error al procesar el archivo ${file.name}:`, error);
+                                reject({ reason: `Error en ${file.name}: ${error.message}` });
+                            }
+                        };
+                        reader.onerror = () => reject({ reason: `Fallo en la lectura del archivo ${file.name}` });
+                        
+                        reader.readAsText(file);
+                    }));
+                }
+
+                try {
+                    const allResults = await Promise.allSettled(filePromises);
+                    
+                    let firstCoords = [0, 0];
+                    let validRoutesCount = 0;
+                    overallStartTime = Infinity; 
+
+                    // 1. Recopilar todas las rutas y encontrar el tiempo de inicio más temprano
+                    allResults.forEach((result, routeIndex) => {
+                        if (result.status === 'fulfilled' && result.value.length > 0) {
+                            const points = result.value;
+                            
+                            if (points[0].time < overallStartTime) {
+                                overallStartTime = points[0].time;
+                            }
+
+                            allRoutesData.push({
+                                points: points,
+                                color: routeColors[routeIndex % routeColors.length],
+                                currentIndex: 0,
+                                isComplete: false,
+                                line: null 
+                            });
+                            validRoutesCount++;
+                            if (validRoutesCount === 1) { 
+                                firstCoords = [points[0].lat, points[0].lon];
+                            }
+                        } else if (result.status === 'rejected') {
+                            messageElement.textContent += ` | Fallo: ${result.reason.reason}`;
+                            messageElement.className = 'message';
+                        }
+                    });
+
+                    if (allRoutesData.length === 0) {
+                        messageElement.textContent = 'No se pudo cargar ninguna ruta GPX válida o con marcas de tiempo.';
+                        messageElement.className = 'message';
+                        zoomButton.disabled = true;
+                        clearButton.disabled = true;
+                        clearButton.style.display = 'none';
+                        return;
+                    }
+
+                    // 2. Inicializar el mapa, líneas, marcadores y el panel de estado
+                    const mapInstance = initializeMap(firstCoords[0], firstCoords[1]);
+                    
+                    statusPanel.style.display = 'block'; // Mostrar el panel
+
+                    allRoutesData.forEach((route, index) => {
+                        // A. Inicializar línea
+                        route.line = L.polyline([], {
+                            color: route.color, 
+                            weight: 6,
+                            opacity: 0.8
+                        }).addTo(mapInstance);
+                        
+                        // B. Inicializar marcador (Velerito simple, sin texto)
+                        const marker = L.marker([route.points[0].lat, route.points[0].lon], {
+                            icon: L.divIcon({className: 'start-marker', html: `⛵`}) 
+                        }).addTo(mapInstance)
+                          .bindPopup(`Ruta #${index + 1} - Inicio`);
+                          
+                        currentMarkers.push(marker);
+
+                        // C. Crear el DIV de estado en el panel superior derecho
+                        const statusHtml = `
+                            <div class="route-status-box" id="route-status-${index}" style="border-color: ${route.color};">
+                                <span class="route-label" style="color: ${route.color};">Ruta #${index + 1}</span>
+                                <span class="speed-label">0.0 km/h</span>
+                            </div>
+                        `;
+                        statusPanel.insertAdjacentHTML('beforeend', statusHtml);
+                    });
+
+                    // 3. Centrar y ampliar el mapa
+                    fitToRouteBounds();
+
+                    // 4. Iniciar la animación sincronizada
+                    messageElement.textContent = `Iniciando animación sincronizada (${SPEED_MULTIPLIER}x)...`;
+                    
+                    animationStartTimestamp = null;
+                    animationFrameId = requestAnimationFrame(animateRoutes);
+
+                    // 5. Actualizar controles
+                    zoomButton.disabled = false;
+                    clearButton.disabled = false;
+                    clearButton.style.display = 'block';
+                    
+                } catch (error) {
+                    messageElement.textContent = `Error crítico al procesar archivos.`;
+                    messageElement.className = 'message';
+                }
+            });
+            
+            // Inicialización de la vista por defecto
+            initializeMap(0, 0, 2); 
+        });
+    </script>
+</body>
+</html>
