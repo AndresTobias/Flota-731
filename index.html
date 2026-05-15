@@ -5,8 +5,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Visor Múltiple de Rutas GPX con Animación</title>
     
+    <!-- 1. Librería Leaflet (CSS) -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
     
+    <!-- 2. Estilos CSS Personalizados -->
     <style>
         body { 
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
@@ -41,7 +43,7 @@
             border-radius: 8px;
             box-shadow: inset 0 1px 3px rgba(0,0,0,0.1);
             background-color: #ffffff; 
-            position: relative; /* CLAVE para posicionar el panel respecto al mapa */
+            position: relative; 
         }
         #file-selector { 
             display: block;
@@ -77,7 +79,7 @@
         .leaflet-control-zoom {
             display: none !important;
         }
-        #zoom-button, #clear-button {
+        #zoom-button, #clear-button, #pause-button { 
             padding: 10px 20px;
             color: white;
             border: none;
@@ -86,6 +88,7 @@
             font-weight: bold;
             margin: 10px 5px;
             transition: background-color 0.3s;
+            font-size: 14px;
         }
         #zoom-button {
             background-color: #2ecc71; 
@@ -99,21 +102,48 @@
         #clear-button:hover {
             background-color: #c0392b;
         }
-        #zoom-button:disabled, #clear-button:disabled {
+        #pause-button {
+            background-color: #f39c12; 
+        }
+        #pause-button:hover {
+            background-color: #d35400;
+        }
+        #zoom-button:disabled, #clear-button:disabled, #pause-button:disabled {
             background-color: #bdc3c7;
             cursor: not-allowed;
         }
+        
+        /* 🎯 ESTILOS DEL NUEVO SELECTOR DE VELOCIDAD */
+        #speed-selector {
+            padding: 10px;
+            border-radius: 5px;
+            border: 1px solid #a8c2d9;
+            margin: 10px 5px;
+            font-weight: bold;
+            cursor: pointer;
+            font-size: 14px;
+            background-color: white;
+            color: #333;
+        }
+        #speed-selector:disabled {
+            background-color: #ecf0f1;
+            color: #95a5a6;
+            cursor: not-allowed;
+        }
+
         #controls {
             display: flex;
             justify-content: center;
+            align-items: center;
+            flex-wrap: wrap; /* Permite que los botones bajen si la pantalla es chica */
             width: 100%;
         }
 
-        /* --- NUEVOS ESTILOS PARA EL PANEL DE CONTROL --- */
+        /* --- ESTILOS PARA EL PANEL DE CONTROL --- */
         #status-panel {
             position: absolute;
-            top: 10px;    /* Distancia desde el borde superior del MAPA */
-            right: 10px;  /* Distancia desde el borde derecho del MAPA */
+            top: 10px;    
+            right: 10px;  
             z-index: 1000; 
             background: rgba(255, 255, 255, 0.9);
             padding: 10px;
@@ -124,7 +154,6 @@
             overflow-y: auto;
             display: none; 
         }
-
         .route-status-box {
             margin-bottom: 8px;
             padding: 5px;
@@ -132,7 +161,6 @@
             font-size: 0.9em;
             line-height: 1.2;
         }
-
         .route-status-box .route-label {
             font-weight: bold;
             display: block;
@@ -142,7 +170,6 @@
             display: block;
             font-size: 1.1em;
         }
-        /* ----------------------------------------------- */
     </style>
 </head>
 <body>
@@ -152,6 +179,15 @@
         <input type="file" id="file-selector" accept=".gpx" multiple>
         
         <div id="controls">
+            <button id="pause-button" disabled>⏸️ Pausa</button> 
+            
+            <!-- 🎯 NUEVO SELECTOR DE VELOCIDAD -->
+            <select id="speed-selector" disabled>
+                <option value="1">Velocidad: 1x</option>
+                <option value="5">Velocidad: 5x</option>
+                <option value="10" selected>Velocidad: 10x</option>
+            </select>
+
             <button id="zoom-button" disabled>🔄 Centrar y Ampliar Rutas</button>
             <button id="clear-button" disabled style="display: none;">🗑️ Limpiar Mapa</button>
         </div>
@@ -160,12 +196,15 @@
         
         <div id="map">
             <div id="status-panel">
-                </div>
+                <!-- Los datos se insertarán aquí dinámicamente -->
+            </div>
         </div>
     </div>
 
+    <!-- 3. Librería Leaflet (JavaScript) -->
     <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
     
+    <!-- 4. Lógica de la Aplicación (JavaScript) -->
     <script>
         document.addEventListener('DOMContentLoaded', () => {
             // --- CONSTANTES Y VARIABLES GLOBALES ---
@@ -173,7 +212,9 @@
             const messageElement = document.getElementById('message');
             const zoomButton = document.getElementById('zoom-button'); 
             const clearButton = document.getElementById('clear-button'); 
-            const statusPanel = document.getElementById('status-panel'); // Referencia al nuevo panel
+            const pauseButton = document.getElementById('pause-button'); 
+            const speedSelector = document.getElementById('speed-selector'); // 🎯 Referencia al selector
+            const statusPanel = document.getElementById('status-panel'); 
             
             let map = null; 
             let allRoutesData = []; 
@@ -181,69 +222,60 @@
             let animationFrameId = null; 
             let overallStartTime = 0; 
             let currentMarkers = []; 
-            const SPEED_MULTIPLIER = 10; 
+            
+            // 🎯 VARIABLES DE CONTROL DE ESTADO
+            let speedMultiplier = 10; // Ahora es variable, inicia en 10x
+            let isPaused = false; 
+            let pauseStartTime = 0;             
 
             // --- FUNCIÓN AUXILIAR: Distancia Haversine (en km) ---
             function getDistance(lat1, lon1, lat2, lon2) {
-                const R = 6371; // Radio de la Tierra en kilómetros
+                const R = 6371; 
                 const dLat = (lat2 - lat1) * (Math.PI / 180);
                 const dLon = (lon2 - lon1) * (Math.PI / 180);
                 const a = 
                     Math.sin(dLat / 2) * Math.sin(dLat / 2) +
                     Math.cos(lat1 * (Math.PI / 180)) * Math.cos(lat2 * (Math.PI / 180)) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
                 const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-                return R * c; // Distancia en km
+                return R * c; 
             }
 
-
-            // --- DECODIFICADOR Y EXTRACTOR GPX NATIVO (CON TIEMPO) ---
             function decodeAndExtractGPX(xmlString) {
                 return new Promise((resolve, reject) => {
                     const points = []; 
-                    
                     try {
                         const parser = new DOMParser();
                         const xmlDoc = parser.parseFromString(xmlString, "text/xml");
-                        
                         let trackPoints = xmlDoc.getElementsByTagName('trkpt');
-                        if (trackPoints.length === 0) {
-                             trackPoints = xmlDoc.getElementsByTagName('rtept');
-                        }
-                        if (trackPoints.length === 0) {
-                             trackPoints = xmlDoc.querySelectorAll('trkpt, rtept');
-                        }
+                        if (trackPoints.length === 0) { trackPoints = xmlDoc.getElementsByTagName('rtept'); }
+                        if (trackPoints.length === 0) { trackPoints = xmlDoc.querySelectorAll('trkpt, rtept'); }
 
                         if (trackPoints.length === 0) {
-                            reject(new Error("El archivo GPX es válido pero no contiene puntos de seguimiento (<trkpt> o <rtept>)."));
+                            reject(new Error("El archivo GPX es válido pero no contiene puntos de seguimiento."));
                             return;
                         }
-
                         for (let i = 0; i < trackPoints.length; i++) {
                             const point = trackPoints[i];
                             const lat = parseFloat(point.getAttribute('lat'));
                             const lon = parseFloat(point.getAttribute('lon'));
-                            
                             const timeElement = point.getElementsByTagName('time')[0];
                             const timeStr = timeElement ? timeElement.textContent : null;
                             const timeMs = timeStr ? new Date(timeStr).getTime() : null; 
-
                             if (!isNaN(lat) && !isNaN(lon) && timeMs !== null) {
                                 points.push({ lat: lat, lon: lon, time: timeMs });
                             }
                         }
-                        
                         if (points.length > 0) {
                             resolve(points);
                         } else {
-                            reject(new Error("No se pudieron extraer coordenadas válidas o marcas de tiempo del archivo GPX."));
+                            reject(new Error("No se pudieron extraer coordenadas válidas o marcas de tiempo."));
                         }
                     } catch (error) {
-                        reject(new Error("Error al analizar el contenido XML del archivo GPX: " + error.message));
+                        reject(new Error("Error al analizar el contenido XML: " + error.message));
                     }
                 });
             }
 
-            // --- 1. Inicializar/Reiniciar el Mapa (Leaflet) ---
             function initializeMap(centerLat, centerLon, zoomLevel = 2) {
                 if (map) {
                     map.eachLayer(layer => {
@@ -252,54 +284,86 @@
                         }
                     });
                 } else {
-                    map = L.map('map', { 
-                        zoomControl: false 
-                    });
+                    map = L.map('map', { zoomControl: false });
                     map.invalidateSize();
-                    
                     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
                         maxZoom: 19,
                         attribution: '© OpenStreetMap contributors'
                     }).addTo(map);
                 }
-                
                 map.setView([centerLat, centerLon], zoomLevel); 
-
                 messageElement.textContent = 'Rutas listas para animar.';
                 messageElement.className = 'message success';
                 return map;
             }
 
-            // --- FUNCIÓN DEL BOTÓN DE ZOOM (Ampliación) ---
             function fitToRouteBounds() {
-                const allPoints = allRoutesData.flatMap(route => 
-                    route.points.map(p => [p.lat, p.lon])
-                );
-
+                const allPoints = allRoutesData.flatMap(route => route.points.map(p => [p.lat, p.lon]));
                 if (map && allPoints.length > 0) {
                     const fullLine = L.polyline(allPoints);
-                    
                     try {
-                        map.fitBounds(fullLine.getBounds(), { 
-                            padding: [100, 100], 
-                            duration: 1.0,
-                            maxZoom: 15
-                        });
+                        map.fitBounds(fullLine.getBounds(), { padding: [100, 100], duration: 1.0, maxZoom: 15 });
                     } catch (e) {
                         console.error("Error en fitBounds:", e);
                     }
                 }
             }
-            
-            // --- 2. FUNCIÓN DE ANIMACIÓN SINCRONIZADA (CON VELOCIDAD) ---
+
+            function togglePause() {
+                if (isPaused) {
+                    isPaused = false;
+                    const timePaused = performance.now() - pauseStartTime;
+                    animationStartTimestamp += timePaused; 
+                    
+                    pauseButton.textContent = '⏸️ Pausa';
+                    messageElement.textContent = `▶️ Animación reanudada (${speedMultiplier}x).`;
+                    animationFrameId = requestAnimationFrame(animateRoutes);
+                } else {
+                    isPaused = true;
+                    pauseStartTime = performance.now(); 
+                    
+                    cancelAnimationFrame(animationFrameId);
+                    pauseButton.textContent = '▶️ Reanudar';
+                    messageElement.textContent = `⏸️ Animación pausada.`;
+                }
+            }
+
+            // 🎯 EVENTO DE CAMBIO DE VELOCIDAD
+            speedSelector.addEventListener('change', (event) => {
+                const newSpeed = parseFloat(event.target.value);
+                
+                // Si la animación ya arrancó, necesitamos recalcular el tiempo 
+                // para que los barcos no salten bruscamente.
+                if (animationStartTimestamp) {
+                    if (!isPaused) {
+                        const now = performance.now();
+                        const elapsedReal = now - animationStartTimestamp;
+                        // Matemática para mantener el mismo tiempo simulado con la nueva velocidad
+                        animationStartTimestamp = now - (elapsedReal * speedMultiplier) / newSpeed;
+                    } else {
+                        const elapsedReal = pauseStartTime - animationStartTimestamp;
+                        animationStartTimestamp = pauseStartTime - (elapsedReal * speedMultiplier) / newSpeed;
+                    }
+                }
+                
+                speedMultiplier = newSpeed;
+                
+                if (!isPaused && currentMarkers.length > 0) {
+                    messageElement.textContent = `▶️ Animando a velocidad ${speedMultiplier}x.`;
+                }
+            });
+
+            // --- 2. FUNCIÓN DE ANIMACIÓN SINCRONIZADA ---
             let animationStartTimestamp = null;
             
             function animateRoutes(timestamp) {
+                if (isPaused) return; 
+                
                 if (!animationStartTimestamp) {
                     animationStartTimestamp = timestamp;
                 }
 
-                const elapsedSinceAnimationStart = (timestamp - animationStartTimestamp) * SPEED_MULTIPLIER; 
+                const elapsedSinceAnimationStart = (timestamp - animationStartTimestamp) * speedMultiplier; 
 
                 let routesCompleted = 0;
 
@@ -326,7 +390,6 @@
                     
                     if (nextPointIndex > route.currentIndex) {
                         
-                        // 4. Dibujar los puntos intermedios
                         for (let j = route.currentIndex + 1; j <= nextPointIndex; j++) {
                             const point = route.points[j];
                             const latlon = [point.lat, point.lon];
@@ -335,7 +398,6 @@
                             lastDrawnIndex = j;
                         }
                         
-                        // 5. Calcular y mostrar la velocidad (solo si se movió al menos un punto)
                         if (lastDrawnIndex > route.currentIndex) {
                             const p1 = route.points[route.currentIndex];
                             const p2 = route.points[lastDrawnIndex];
@@ -350,7 +412,6 @@
                             
                             const speedText = speedKmH.toFixed(1); 
                             
-                            // 🎯 ACTUALIZAR EL PANEL DE ESTADO
                             const statusDiv = document.getElementById(`route-status-${i}`);
                             if (statusDiv) {
                                 statusDiv.querySelector('.speed-label').textContent = `${speedText} km/h`;
@@ -360,7 +421,6 @@
                         route.currentIndex = nextPointIndex;
                     }
                     
-                    // 6. Verificar fin de la ruta
                     if (nextPointIndex >= route.points.length - 1) {
                         route.isComplete = true;
                         marker.remove();
@@ -372,7 +432,6 @@
                         }).addTo(map)
                             .bindPopup(`Fin Ruta #${i + 1}`);
                         
-                        // Actualizar el panel a "Completada"
                         const statusDiv = document.getElementById(`route-status-${i}`);
                         if (statusDiv) {
                             statusDiv.querySelector('.speed-label').textContent = `Completada`;
@@ -382,17 +441,17 @@
                     }
                 }
                 
-                // 7. Loop de animación
                 if (routesCompleted < allRoutesData.length) {
                     animationFrameId = requestAnimationFrame(animateRoutes);
                 } else {
-                    messageElement.textContent = `✅ Animación sincronizada completada. Velocidad: ${SPEED_MULTIPLIER}x.`;
+                    pauseButton.disabled = true; 
+                    speedSelector.disabled = true;
+                    messageElement.textContent = `✅ Animación completada. Velocidad final: ${speedMultiplier}x.`;
                     messageElement.className = 'message success';
                 }
             }
 
 
-            // --- Limpiar el Mapa ---
             function clearMap() {
                  if (animationFrameId) {
                      cancelAnimationFrame(animationFrameId);
@@ -412,21 +471,29 @@
                 currentMarkers = [];
                 overallStartTime = 0;
                 animationStartTimestamp = null;
+                isPaused = false; 
                 
-                // Limpiar y ocultar el panel
                 statusPanel.innerHTML = '';
                 statusPanel.style.display = 'none';
 
+                // Resetear botones y selectores
+                pauseButton.disabled = true;
+                pauseButton.textContent = '⏸️ Pausa';
                 zoomButton.disabled = true;
+                speedSelector.disabled = true; // Desactivar selector
+                speedSelector.value = "10"; // Volver al valor por defecto
+                speedMultiplier = 10;
+                
                 clearButton.disabled = true;
                 clearButton.style.display = 'none';
                 messageElement.textContent = 'Mapa limpiado. Carga uno o varios archivos .gpx para visualizar.';
                 messageElement.className = 'message loading';
             }
             
-            // --- 3. Manejador de Eventos ---
+            // --- 3. Manejadores de Eventos ---
             zoomButton.addEventListener('click', fitToRouteBounds);
             clearButton.addEventListener('click', clearMap);
+            pauseButton.addEventListener('click', togglePause); 
 
             fileSelector.addEventListener('change', async (event) => {
                 const files = event.target.files;
@@ -467,7 +534,6 @@
                     let validRoutesCount = 0;
                     overallStartTime = Infinity; 
 
-                    // 1. Recopilar todas las rutas y encontrar el tiempo de inicio más temprano
                     allResults.forEach((result, routeIndex) => {
                         if (result.status === 'fulfilled' && result.value.length > 0) {
                             const points = result.value;
@@ -502,20 +568,17 @@
                         return;
                     }
 
-                    // 2. Inicializar el mapa, líneas, marcadores y el panel de estado
                     const mapInstance = initializeMap(firstCoords[0], firstCoords[1]);
                     
-                    statusPanel.style.display = 'block'; // Mostrar el panel
+                    statusPanel.style.display = 'block'; 
 
                     allRoutesData.forEach((route, index) => {
-                        // A. Inicializar línea
                         route.line = L.polyline([], {
                             color: route.color, 
                             weight: 6,
                             opacity: 0.8
                         }).addTo(mapInstance);
                         
-                        // B. Inicializar marcador (Velerito simple, sin texto)
                         const marker = L.marker([route.points[0].lat, route.points[0].lon], {
                             icon: L.divIcon({className: 'start-marker', html: `⛵`}) 
                         }).addTo(mapInstance)
@@ -523,7 +586,6 @@
                           
                         currentMarkers.push(marker);
 
-                        // C. Crear el DIV de estado en el panel superior derecho
                         const statusHtml = `
                             <div class="route-status-box" id="route-status-${index}" style="border-color: ${route.color};">
                                 <span class="route-label" style="color: ${route.color};">Ruta #${index + 1}</span>
@@ -533,18 +595,23 @@
                         statusPanel.insertAdjacentHTML('beforeend', statusHtml);
                     });
 
-                    // 3. Centrar y ampliar el mapa
                     fitToRouteBounds();
 
-                    // 4. Iniciar la animación sincronizada
-                    messageElement.textContent = `Iniciando animación sincronizada (${SPEED_MULTIPLIER}x)...`;
+                    messageElement.textContent = `Iniciando animación sincronizada (${speedMultiplier}x)...`;
                     
                     animationStartTimestamp = null;
+                    isPaused = false; 
+                    
+                    // 🎯 LEER LA VELOCIDAD ACTUAL DEL SELECTOR AL INICIAR
+                    speedMultiplier = parseFloat(speedSelector.value); 
+                    
                     animationFrameId = requestAnimationFrame(animateRoutes);
 
                     // 5. Actualizar controles
                     zoomButton.disabled = false;
                     clearButton.disabled = false;
+                    pauseButton.disabled = false; 
+                    speedSelector.disabled = false; // 🎯 Habilitar selector de velocidad
                     clearButton.style.display = 'block';
                     
                 } catch (error) {
@@ -553,7 +620,6 @@
                 }
             });
             
-            // Inicialización de la vista por defecto
             initializeMap(0, 0, 2); 
         });
     </script>
