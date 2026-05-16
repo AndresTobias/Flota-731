@@ -113,7 +113,6 @@
             cursor: not-allowed;
         }
         
-        /* 🎯 ESTILOS DEL NUEVO SELECTOR DE VELOCIDAD */
         #speed-selector {
             padding: 10px;
             border-radius: 5px;
@@ -135,7 +134,7 @@
             display: flex;
             justify-content: center;
             align-items: center;
-            flex-wrap: wrap; /* Permite que los botones bajen si la pantalla es chica */
+            flex-wrap: wrap; 
             width: 100%;
         }
 
@@ -161,11 +160,17 @@
             font-size: 0.9em;
             line-height: 1.2;
         }
+        
+        /* 🎯 EVITAR QUE NOMBRES LARGOS ROMPAN EL PANEL */
         .route-status-box .route-label {
             font-weight: bold;
             display: block;
             margin-bottom: 2px;
+            white-space: nowrap; 
+            overflow: hidden; 
+            text-overflow: ellipsis; 
         }
+        
         .route-status-box .speed-label {
             display: block;
             font-size: 1.1em;
@@ -181,7 +186,6 @@
         <div id="controls">
             <button id="pause-button" disabled>⏸️ Pausa</button> 
             
-            <!-- 🎯 NUEVO SELECTOR DE VELOCIDAD -->
             <select id="speed-selector" disabled>
                 <option value="1">Velocidad: 1x</option>
                 <option value="5">Velocidad: 5x</option>
@@ -213,18 +217,17 @@
             const zoomButton = document.getElementById('zoom-button'); 
             const clearButton = document.getElementById('clear-button'); 
             const pauseButton = document.getElementById('pause-button'); 
-            const speedSelector = document.getElementById('speed-selector'); // 🎯 Referencia al selector
+            const speedSelector = document.getElementById('speed-selector'); 
             const statusPanel = document.getElementById('status-panel'); 
             
             let map = null; 
             let allRoutesData = []; 
-            let routeColors = ['#007bff', '#2ecc71', '#e67e22', '#9b59b6', '#34495e'];
+            let routeColors = ['#007bff', '#2ecc71', '#e67e22', '#9b59b6', '#e74c3c', '#34495e'];
             let animationFrameId = null; 
             let overallStartTime = 0; 
             let currentMarkers = []; 
             
-            // 🎯 VARIABLES DE CONTROL DE ESTADO
-            let speedMultiplier = 10; // Ahora es variable, inicia en 10x
+            let speedMultiplier = 10; 
             let isPaused = false; 
             let pauseStartTime = 0;             
 
@@ -328,17 +331,13 @@
                 }
             }
 
-            // 🎯 EVENTO DE CAMBIO DE VELOCIDAD
             speedSelector.addEventListener('change', (event) => {
                 const newSpeed = parseFloat(event.target.value);
                 
-                // Si la animación ya arrancó, necesitamos recalcular el tiempo 
-                // para que los barcos no salten bruscamente.
                 if (animationStartTimestamp) {
                     if (!isPaused) {
                         const now = performance.now();
                         const elapsedReal = now - animationStartTimestamp;
-                        // Matemática para mantener el mismo tiempo simulado con la nueva velocidad
                         animationStartTimestamp = now - (elapsedReal * speedMultiplier) / newSpeed;
                     } else {
                         const elapsedReal = pauseStartTime - animationStartTimestamp;
@@ -428,9 +427,11 @@
                         const lastPoint = route.points[route.points.length - 1];
 
                          L.marker([lastPoint.lat, lastPoint.lon], {
-                            icon: L.divIcon({className: 'end-marker', html: `🏁<span style="color:${route.color}"> #${i + 1}</span>`}) 
+                            // 🎯 Quitamos el texto de la banderita para que quede limpia
+                            icon: L.divIcon({className: 'end-marker', html: `🏁`}) 
                         }).addTo(map)
-                            .bindPopup(`Fin Ruta #${i + 1}`);
+                            // 🎯 Mostramos el nombre del archivo al hacer clic en la meta
+                            .bindPopup(`Fin: ${route.fileName}`);
                         
                         const statusDiv = document.getElementById(`route-status-${i}`);
                         if (statusDiv) {
@@ -476,12 +477,11 @@
                 statusPanel.innerHTML = '';
                 statusPanel.style.display = 'none';
 
-                // Resetear botones y selectores
                 pauseButton.disabled = true;
                 pauseButton.textContent = '⏸️ Pausa';
                 zoomButton.disabled = true;
-                speedSelector.disabled = true; // Desactivar selector
-                speedSelector.value = "10"; // Volver al valor por defecto
+                speedSelector.disabled = true; 
+                speedSelector.value = "10"; 
                 speedMultiplier = 10;
                 
                 clearButton.disabled = true;
@@ -541,9 +541,13 @@
                             if (points[0].time < overallStartTime) {
                                 overallStartTime = points[0].time;
                             }
+                            
+                            // 🎯 LIMPIAMOS EL NOMBRE DEL ARCHIVO (quitamos .gpx si existe)
+                            const cleanFileName = files[routeIndex].name.replace(/\.[^/.]+$/, "");
 
                             allRoutesData.push({
                                 points: points,
+                                fileName: cleanFileName, // 🎯 GUARDAMOS EL NOMBRE
                                 color: routeColors[routeIndex % routeColors.length],
                                 currentIndex: 0,
                                 isComplete: false,
@@ -575,20 +579,22 @@
                     allRoutesData.forEach((route, index) => {
                         route.line = L.polyline([], {
                             color: route.color, 
-                            weight: 6,
+                            weight: 3, // 🎯 LÍNEA MÁS FINA (Cambiado de 6 a 3)
                             opacity: 0.8
                         }).addTo(mapInstance);
                         
                         const marker = L.marker([route.points[0].lat, route.points[0].lon], {
                             icon: L.divIcon({className: 'start-marker', html: `⛵`}) 
                         }).addTo(mapInstance)
-                          .bindPopup(`Ruta #${index + 1} - Inicio`);
+                          // 🎯 MOSTRAMOS EL NOMBRE DEL ARCHIVO EN EL POPUP INICIAL
+                          .bindPopup(`Inicio: ${route.fileName}`);
                           
                         currentMarkers.push(marker);
 
+                        // 🎯 REEMPLAZAMOS "Ruta #X" POR EL NOMBRE DEL ARCHIVO EN EL PANEL
                         const statusHtml = `
                             <div class="route-status-box" id="route-status-${index}" style="border-color: ${route.color};">
-                                <span class="route-label" style="color: ${route.color};">Ruta #${index + 1}</span>
+                                <span class="route-label" style="color: ${route.color};" title="${route.fileName}">${route.fileName}</span>
                                 <span class="speed-label">0.0 km/h</span>
                             </div>
                         `;
@@ -602,16 +608,14 @@
                     animationStartTimestamp = null;
                     isPaused = false; 
                     
-                    // 🎯 LEER LA VELOCIDAD ACTUAL DEL SELECTOR AL INICIAR
                     speedMultiplier = parseFloat(speedSelector.value); 
                     
                     animationFrameId = requestAnimationFrame(animateRoutes);
 
-                    // 5. Actualizar controles
                     zoomButton.disabled = false;
                     clearButton.disabled = false;
                     pauseButton.disabled = false; 
-                    speedSelector.disabled = false; // 🎯 Habilitar selector de velocidad
+                    speedSelector.disabled = false; 
                     clearButton.style.display = 'block';
                     
                 } catch (error) {
